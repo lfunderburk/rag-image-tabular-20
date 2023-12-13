@@ -43,47 +43,41 @@ class JsonToDocument:
 
     @component.output_types(documents=List[Document])
     def run(self, sources: List[Union[str, Path, ByteStream]]):
-        """
-        Reads JSON content and converts it to Documents, with options for DataFrame flattening and document creation mode.
-
-        :param sources: A list of JSON data sources (file paths or binary objects)
-        """
         documents = []
 
-        for source in tqdm(
-            sources,
-            desc="Converting JSON files to Documents",
-            disable=not self.progress_bar,
-        ):
+        for source in tqdm(sources, desc="Converting JSON files to Documents", disable=not self.progress_bar):
             try:
                 file_content = self._extract_content(source)
                 json_data = json.loads(file_content)
 
-                # Flatten JSON if specified
-                if self.flatten_field:
-                    df = pd.json_normalize(json_data, record_path=self.flatten_field)
-                else:
-                    df = pd.DataFrame(json_data if isinstance(json_data, list) else [json_data])
+                # Determine if json_data is a list or a single dict
+                if isinstance(json_data, dict):
+                    json_data = [json_data]  # Make it a list for uniform processing
 
+                # Create documents based on the user's choice
                 if self.one_doc_per_row:
-                    # Create a document for each row of the DataFrame
-                    for _, row in df.iterrows():
-                        content = row[self.content_field] if self.content_field and self.content_field in row else None
-                        document = Document(content=content, dataframe=pd.DataFrame([row]))
+                    # Create one document per JSON object
+                    for item in json_data:
+                        content = item.get(self.content_field, None) if self.content_field else None
+                        document = Document(content=content, meta=item)
                         documents.append(document)
                 else:
-                    # Create a single document from the entire DataFrame
+                    # Create a single document from all JSON objects
                     content = None
-                    if self.content_field and self.content_field in df.columns:
-                        content = df[self.content_field].iloc[0]
-
-                    document = Document(content=content, dataframe=df)
+                    combined_meta = {}
+                    for item in json_data:
+                        combined_meta.update(item)  # Merge all items into a single meta
+                        if self.content_field and self.content_field in item:
+                            content = item[self.content_field]  # Set content from the last item
+                    document = Document(content=content, meta=combined_meta)
                     documents.append(document)
 
             except Exception as e:
                 logger.warning("Failed to process %s. Error: %s", source, e)
 
         return {"documents": documents}
+
+
 
     def _extract_content(self, source: Union[str, Path, ByteStream]) -> str:
         """
